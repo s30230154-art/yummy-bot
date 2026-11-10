@@ -1,5 +1,7 @@
 import os
+import asyncio
 import logging
+from aiohttp import web
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 from google import genai
@@ -10,14 +12,6 @@ from google.genai import types
 # ============================================================
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GEMINI_API_KEY     = os.environ["GEMINI_API_KEY"]
-
-# WEBHOOK_URL - ចំណាំ: កំណត់នៅពេល Render ផ្តល់ URL ហើយ
-# Format: https://your-service-name.onrender.com
-# ប្រសិនបើ WEBHOOK_URL មិនទាន់ set ទេ bot នឹងប្រើ polling mode ជំនួស
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-
-# Port ដែល Render ប្រើ (ស្វ័យប្រវត្ត)
-PORT = int(os.environ.get("PORT", 8080))
 
 # ============================================================
 # GEMINI AI CLIENT
@@ -99,25 +93,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# MAIN - ប្រើ Webhook ឬ Polling ស្វ័យប្រវត្ត
+# MAIN - Polling + Web Server រត់ស្រប​ពេល​គ្នា (ចាំបាច់សម្រាប់ Render)
 # ============================================================
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+async def health_check(request):
+    """Health check endpoint ដើម្បីឱ្យ Render ស្គាល់ Port"""
+    return web.Response(text="🤖 Yummy Bot is running!")
 
+async def run_web_server():
+    """Web server តូច bind Port ឱ្យ Render"""
+    port = int(os.environ.get("PORT", 8080))
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"✅ Web server ដំណើរការលើ port {port}")
+
+async def run_bot():
+    """Telegram Bot polling"""
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    print("🤖 Yummy Bot ដំណើរការ via Polling...")
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        # រក្សា bot ដំណើរការ
+        await asyncio.Event().wait()
 
-    if WEBHOOK_URL:
-        # Webhook Mode - ប្រើពេល WEBHOOK_URL បានកំណត់
-        print(f"🤖 Yummy Bot ដំណើរការ via Webhook លើ port {PORT}...")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=f"{WEBHOOK_URL}/webhook",
-        )
-    else:
-        # Polling Mode - ប្រើពេលដំបូងមុន WEBHOOK_URL ត្រូវបានកំណត់
-        print("🤖 Yummy Bot ដំណើរការ via Polling (WEBHOOK_URL មិនទាន់កំណត់)...")
-        app.run_polling()
+async def main():
+    """ដំណើរការ Web Server + Bot ស្រប​ពេល​គ្នា"""
+    await asyncio.gather(
+        run_web_server(),
+        run_bot(),
+    )
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
